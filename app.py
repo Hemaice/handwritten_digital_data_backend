@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 import torch
 import torch.nn as nn
@@ -6,6 +7,21 @@ import torchvision.transforms as transforms
 import io
 
 app = FastAPI()
+
+# ------------------
+# CORS Middleware
+# ------------------
+origins = [
+    "*",  # For testing. Later replace with your frontend URL, e.g., "https://your-frontend.vercel.app"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ------------------
 # CNN Model (same as training)
@@ -27,7 +43,6 @@ class CNNFeatureExtractor(nn.Module):
     def forward(self, x):
         return self.fc(self.cnn(x))
 
-
 # ------------------
 # Personality Predictor
 # ------------------
@@ -42,7 +57,6 @@ class PersonalityPredictor(nn.Module):
 
     def forward(self, x):
         return self.net(x)
-
 
 # ------------------
 # Load models
