@@ -1,19 +1,15 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image
+from PIL import Image, ImageOps
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
+import numpy as np
 import io
 
 app = FastAPI()
 
-# ------------------
-# CORS Middleware
-# ------------------
-origins = [
-    "*",  # For testing. Later replace with your frontend URL, e.g., "https://your-frontend.vercel.app"
-]
+origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,7 +20,7 @@ app.add_middleware(
 )
 
 # ------------------
-# CNN Model (same as training)
+# CNN Feature Extractor
 # ------------------
 class CNNFeatureExtractor(nn.Module):
     def __init__(self, out_dim=128):
@@ -38,10 +34,11 @@ class CNNFeatureExtractor(nn.Module):
             nn.MaxPool2d(2),
             nn.Flatten()
         )
-        self.fc = nn.Linear(64 * 16 * 64, out_dim)
+        self.fc = nn.Linear(64 * 16 * 16, out_dim)   # FIXED DIMENSION
 
     def forward(self, x):
-        return self.fc(self.cnn(x))
+        x = self.cnn(x)
+        return self.fc(x)
 
 # ------------------
 # Personality Predictor
@@ -58,6 +55,7 @@ class PersonalityPredictor(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+
 # ------------------
 # Load models
 # ------------------
@@ -66,44 +64,53 @@ cnn.load_state_dict(torch.load("models/cnn_model.pth", map_location="cpu"))
 cnn.eval()
 
 predictor = PersonalityPredictor()
-predictor.load_state_dict(
-    torch.load("models/personality_predictor.pth", map_location="cpu"),
-    strict=False
-)
+predictor.load_state_dict(torch.load("models/personality_predictor.pth", map_location="cpu"))
 predictor.eval()
 
 # ------------------
-# Image transform
+# FIXED TRANSFORM (Better for handwriting)
 # ------------------
 transform = transforms.Compose([
-    transforms.Resize((64, 256)),
+    transforms.Resize((128, 128)),     # Square, avoids distortion
     transforms.Grayscale(),
-    transforms.ToTensor()
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))   # Helps model stability
 ])
 
 # ------------------
-# PREDICT ENDPOINT
+# FINAL FIXED PREDICT ENDPOINT
 # ------------------
 @app.post("/predict")
 async def predict(image: UploadFile = File(...)):
+    # Read uploaded bytes
     image_bytes = await image.read()
-    img = Image.open(io.BytesIO(image_bytes)).convert("L")
+
+    # Read image with Pillow
+    img = Image.open(io.BytesIO(image_bytes))
+
+    # ---- FIX transparency (canvas PNG) ----
+    if img.mode == "RGBA":
+        background = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        background.paste(img, mask=img.split()[3])
+        img = background.convert("RGB")
+
+    img = img.convert("L")
+
+    # Apply transform
     img = transform(img).unsqueeze(0)
 
+    # Model Prediction
     with torch.no_grad():
         features = cnn(img)
         output = predictor(features)
         scores = torch.sigmoid(output).squeeze().tolist()
 
-    traits = [
-        "Openness",
-        "Conscientiousness",
-        "Extraversion",
-        "Agreeableness",
-        "Neuroticism"
-    ]
+    traits = ["Openness", "Conscientiousness", "Extraversion", "Agreeableness", "Neuroticism"]
 
-    result = dict(zip(traits, scores))
-    result["dominant_trait"] = traits[scores.index(max(scores))]
+    # Map result
+    result = {trait: float(score) for trait, score in zip(traits, scores)}
+
+    # Find dominant
+    result["dominant_trait"] = traits[int(np.argmax(scores))]
 
     return result
