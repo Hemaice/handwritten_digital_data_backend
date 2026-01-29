@@ -11,9 +11,7 @@ app = FastAPI()
 # ------------------
 # CORS Middleware
 # ------------------
-origins = [
-    "*",  # For testing. Later replace with your frontend URL, e.g., "https://your-frontend.vercel.app"
-]
+origins = ["*"]  # Change to frontend URL in production
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,7 +22,7 @@ app.add_middleware(
 )
 
 # ------------------
-# CNN Model (same as training)
+# CNN Feature Extractor
 # ------------------
 class CNNFeatureExtractor(nn.Module):
     def __init__(self, out_dim=128):
@@ -41,7 +39,8 @@ class CNNFeatureExtractor(nn.Module):
         self.fc = nn.Linear(64 * 16 * 64, out_dim)
 
     def forward(self, x):
-        return self.fc(self.cnn(x))
+        x = self.cnn(x)
+        return self.fc(x)
 
 # ------------------
 # Personality Predictor
@@ -59,7 +58,7 @@ class PersonalityPredictor(nn.Module):
         return self.net(x)
 
 # ------------------
-# Load models
+# Load Models
 # ------------------
 cnn = CNNFeatureExtractor()
 cnn.load_state_dict(torch.load("models/cnn_model.pth", map_location="cpu"))
@@ -73,12 +72,13 @@ predictor.load_state_dict(
 predictor.eval()
 
 # ------------------
-# Image transform
+# Image Transform
 # ------------------
 transform = transforms.Compose([
     transforms.Resize((64, 256)),
     transforms.Grayscale(),
-    transforms.ToTensor()
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5], std=[0.5])  # VERY IMPORTANT
 ])
 
 # ------------------
@@ -87,13 +87,17 @@ transform = transforms.Compose([
 @app.post("/predict")
 async def predict(image: UploadFile = File(...)):
     image_bytes = await image.read()
+
+    # Load image
     img = Image.open(io.BytesIO(image_bytes)).convert("L")
     img = transform(img).unsqueeze(0)
 
     with torch.no_grad():
         features = cnn(img)
         output = predictor(features)
-        scores = torch.softmax(output, dim=1).squeeze().tolist()
+
+        # ✅ CORRECT ACTIVATION (NOT softmax)
+        scores = torch.sigmoid(output).squeeze().tolist()
 
     traits = [
         "Openness",
@@ -103,7 +107,7 @@ async def predict(image: UploadFile = File(...)):
         "Neuroticism"
     ]
 
-    dominant_index = int(torch.argmax(torch.tensor(scores)))
+    dominant_index = scores.index(max(scores))
 
     result = dict(zip(traits, scores))
     result["dominant_trait"] = traits[dominant_index]
