@@ -93,7 +93,7 @@ async def predict(image: UploadFile = File(...)):
     with torch.no_grad():
         features = cnn(img)
         output = predictor(features)
-        scores = torch.sigmoid(output).squeeze().tolist()
+        scores = torch.softmax(output, dim=1).squeeze().tolist()
 
     traits = [
         "Openness",
@@ -103,8 +103,9 @@ async def predict(image: UploadFile = File(...)):
         "Neuroticism"
     ]
 
+    dominant_index = int(torch.argmax(torch.tensor(scores)))
+
     result = dict(zip(traits, scores))
-    result["dominant_trait"] = traits[scores.index(max(scores))]
+    result["dominant_trait"] = traits[dominant_index]
 
     return result
-
